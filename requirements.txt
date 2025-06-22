@@ -21,3 +21,7 @@ boto3
 
 # Date parsing
 python-dateutil
+
+# Location clustering
+numpy
+scikit-learn

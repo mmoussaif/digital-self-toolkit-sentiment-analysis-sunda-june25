@@ -6,9 +6,10 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .filters import MessageFilter
-from .models import Day, Message, TimeAnalysis
+from .models import Day, Location, Message, TimeAnalysis
 from .serializers import (
     DaySerializer,
+    LocationSerializer,
     MessageSerializer,
     TimeAnalysisCreateSerializer,
     TimeAnalysisSerializer,
@@ -170,4 +171,55 @@ class MessageViewSet(viewsets.ReadOnlyModelViewSet):
 
         messages = queryset[:limit]
         serializer = self.get_serializer(messages, many=True)
+        return Response(serializer.data)
+
+
+class LocationViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for Location model.
+    Read-only viewset for viewing clustered locations.
+    """
+
+    queryset = Location.objects.all()
+    serializer_class = LocationSerializer
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ["time_analysis"]
+    ordering_fields = ["visit_count", "total_time_minutes", "first_visit", "last_visit"]
+    ordering = ["-visit_count"]  # Default to most visited locations first
+
+    def get_queryset(self):
+        queryset = Location.objects.all()
+        time_analysis_id = self.request.query_params.get("time_analysis")
+
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        return queryset.select_related("time_analysis").order_by("-visit_count")
+
+    @action(detail=False, methods=["get"])
+    def most_visited(self, request):
+        """Get the most visited locations."""
+        limit = int(request.query_params.get("limit", 10))
+        time_analysis_id = request.query_params.get("time_analysis")
+
+        queryset = self.get_queryset().order_by("-visit_count")
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        locations = queryset[:limit]
+        serializer = self.get_serializer(locations, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def longest_stays(self, request):
+        """Get locations with the longest total time spent."""
+        limit = int(request.query_params.get("limit", 10))
+        time_analysis_id = request.query_params.get("time_analysis")
+
+        queryset = self.get_queryset().order_by("-total_time_minutes")
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        locations = queryset[:limit]
+        serializer = self.get_serializer(locations, many=True)
         return Response(serializer.data)

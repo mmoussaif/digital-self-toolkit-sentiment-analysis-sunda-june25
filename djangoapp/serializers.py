@@ -1,6 +1,37 @@
 from rest_framework import serializers
 
-from .models import Day, Message, TimeAnalysis
+from .models import Day, Location, Message, TimeAnalysis
+
+
+class LocationSerializer(serializers.ModelSerializer):
+    """Serializer for clustered location data."""
+
+    coordinates = serializers.ReadOnlyField()
+    average_time_per_visit = serializers.ReadOnlyField()
+
+    class Meta:
+        model = Location
+        fields = [
+            "id",
+            "name",
+            "center_latitude",
+            "center_longitude",
+            "coordinates",
+            "visit_count",
+            "total_time_minutes",
+            "average_time_per_visit",
+            "first_visit",
+            "last_visit",
+            "address",
+            "activity_types",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "coordinates",
+            "average_time_per_visit",
+        ]
 
 
 class MessageSerializer(serializers.ModelSerializer):

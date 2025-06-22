@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 from collections import defaultdict
 from datetime import datetime
@@ -7,6 +8,8 @@ import boto3
 from dateutil.parser import parse as parse_date
 from django.db import models
 from supabase import Client, create_client
+
+from .location_clustering import process_location_data
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +62,10 @@ class TimeAnalysis(models.Model):
         """
         print("🔄 Starting sentiment analysis...")
 
-        # Clear ALL existing Day and Message objects (from all TimeAnalyses)
+        # Clear ALL existing Day, Message, and Location objects (from all TimeAnalyses)
         existing_messages_count = Message.objects.count()
         existing_days_count = Day.objects.count()
+        existing_locations_count = Location.objects.count()
 
         if existing_messages_count > 0:
             print(f"🗑️  Clearing {existing_messages_count} existing Message records...")
@@ -72,8 +76,20 @@ class TimeAnalysis(models.Model):
             print(f"🗑️  Clearing {existing_days_count} existing Day records...")
             Day.objects.all().delete()
             print("✅ All existing Day records cleared")
-        else:
-            print("ℹ️  No existing Day/Message records to clear")
+
+        if existing_locations_count > 0:
+            print(
+                f"🗑️  Clearing {existing_locations_count} existing Location records..."
+            )
+            Location.objects.all().delete()
+            print("✅ All existing Location records cleared")
+
+        if (
+            existing_messages_count == 0
+            and existing_days_count == 0
+            and existing_locations_count == 0
+        ):
+            print("ℹ️  No existing Day/Message/Location records to clear")
 
         self.status = "processing"
         self.save(update_fields=["status"])
@@ -125,6 +141,10 @@ class TimeAnalysis(models.Model):
         # Query WhatsApp messages
         print("  💬 Querying WhatsApp messages...")
         self._fetch_whatsapp_messages(supabase, daily_messages)
+
+        # Fetch location data
+        print("📍 Fetching location data...")
+        self._fetch_location_data(supabase)
 
         total_days_with_messages = len(daily_messages)
         total_messages = sum(len(messages) for messages in daily_messages.values())
@@ -279,6 +299,11 @@ class TimeAnalysis(models.Model):
                         )
                         continue
 
+                    # Skip unsupported message types
+                    if "[Unsupported message type]" in message.get("text", ""):
+                        print("    ⚠️  Skipping unsupported message type")
+                        continue
+
                     # Debug: Check for problematic message
                     if "I'm totally stumped" in message.get("text", ""):
                         print("    🔍 FOUND PROBLEMATIC MESSAGE:")
@@ -374,6 +399,11 @@ class TimeAnalysis(models.Model):
                         )
                         continue
 
+                    # Skip unsupported message types
+                    if "[Unsupported message type]" in message.get("text", ""):
+                        print("    ⚠️  Skipping unsupported message type")
+                        continue
+
                     # Debug: Check for problematic message
                     if "I'm totally stumped" in message.get("text", ""):
                         print("    🔍 FOUND PROBLEMATIC MESSAGE IN WHATSAPP:")
@@ -444,6 +474,285 @@ class TimeAnalysis(models.Model):
 
         except Exception as e:
             logger.error(f"Error fetching Gmail emails: {e}")
+
+    def _fetch_location_data(self, supabase: Client):
+        """Fetch location data from Supabase and store it."""
+        try:
+            # Convert date range to timestamps for filtering
+            start_datetime = f"{self.start_date} 00:00:00"
+            end_datetime = f"{self.end_date} 23:59:59"
+
+            print(
+                f"    📍 Querying location data from {start_datetime} to {end_datetime}"
+            )
+
+            # Fetch location data with pagination
+            all_locations = []
+            batch_size = 1000
+            offset = 0
+
+            while True:
+                response = (
+                    supabase.table("location_history")
+                    .select(
+                        "timestamp, latitude, longitude, accuracy, altitude, speed, heading, activity_type, location_name, address, source"
+                    )
+                    .gte("timestamp", start_datetime)
+                    .lte("timestamp", end_datetime)
+                    .range(offset, offset + batch_size - 1)
+                    .execute()
+                )
+
+                if not response.data:
+                    break
+
+                all_locations.extend(response.data)
+                offset += batch_size
+
+                print(
+                    f"      Fetched batch {offset // batch_size}: {len(response.data)} locations (total: {len(all_locations)})"
+                )
+
+                if len(response.data) < batch_size:
+                    break  # No more data
+
+            print(f"    📍 Found {len(all_locations)} location records in date range")
+
+            if not all_locations:
+                print("    ℹ️  No location data to process")
+                return
+
+            # Convert to temporary objects for clustering
+            location_objects = []
+            for location_data in all_locations:
+                try:
+                    timestamp = parse_date(location_data["timestamp"])
+
+                    # Ensure all fields have proper default values to avoid NULL constraint issues
+                    location_obj = {
+                        "timestamp": timestamp,
+                        "latitude": location_data.get("latitude"),
+                        "longitude": location_data.get("longitude"),
+                        "accuracy": location_data.get("accuracy"),
+                        "altitude": location_data.get("altitude"),
+                        "speed": location_data.get("speed"),
+                        "heading": location_data.get("heading"),
+                        "activity_type": location_data.get("activity_type") or "",
+                        "location_name": location_data.get("location_name") or "",
+                        "address": location_data.get("address") or "",
+                        "source": location_data.get("source") or "ios",
+                    }
+                    location_objects.append(location_obj)
+                except Exception as e:
+                    print(f"      ❌ Error parsing location data: {e}")
+                    logger.warning(f"Error parsing location data: {e}")
+
+            print(
+                f"    🔍 Clustering {len(location_objects)} location points using new methodology..."
+            )
+
+            # Convert to format expected by new clustering algorithm
+            gps_data = []
+            for loc_obj in location_objects:
+                gps_data.append(
+                    {
+                        "latitude": loc_obj["latitude"],
+                        "longitude": loc_obj["longitude"],
+                        "timestamp": loc_obj["timestamp"].isoformat(),
+                        "activity_type": loc_obj.get("activity_type", ""),
+                        "location_name": loc_obj.get("location_name", ""),
+                        "address": loc_obj.get("address", ""),
+                        "source": loc_obj.get("source", "ios"),
+                    }
+                )
+
+            # Use the new clustering approach
+            location_clusters = process_location_data(
+                gps_data,
+                stay_distance_threshold=100,  # 100m for stay point detection
+                stay_time_threshold=10,  # 10 minutes minimum
+                cluster_distance_threshold=200,  # 200m for clustering stay points
+                min_cluster_visits=2,  # At least 2 visits to be significant
+            )
+
+            # Convert LocationCluster objects to Django Location models
+            locations = []
+            for cluster in location_clusters:
+                location = Location.objects.create(
+                    time_analysis=self,
+                    name=cluster.name,
+                    center_latitude=cluster.center_latitude,
+                    center_longitude=cluster.center_longitude,
+                    visit_count=cluster.visit_count,
+                    total_time_minutes=int(cluster.total_time_minutes),
+                    first_visit=cluster.first_visit,
+                    last_visit=cluster.last_visit,
+                    address=cluster.address,
+                    activity_types=dict(cluster.activity_types),
+                )
+                locations.append(location)
+
+            print(
+                f"    📍 Created {len(locations)} distinct locations from new clustering methodology"
+            )
+
+        except Exception as e:
+            print(f"    ❌ Error fetching location data: {e}")
+            logger.error(f"Error fetching location data: {e}")
+
+    def _cluster_locations(
+        self, location_data: list, cluster_radius_meters: int = 200
+    ) -> list:
+        """
+        Cluster nearby GPS points into distinct locations using distance-based clustering.
+        Returns a list of created Location objects.
+        """
+        if not location_data:
+            return []
+
+        print(
+            f"      🔍 Starting clustering with {len(location_data)} GPS points (radius: {cluster_radius_meters}m)"
+        )
+
+        # Sort by timestamp
+        location_data.sort(key=lambda x: x["timestamp"])
+
+        locations = []
+        unclustered = location_data.copy()
+        cluster_id = 1
+
+        while unclustered:
+            # Start a new cluster with the first unclustered point
+            seed_point = unclustered.pop(0)
+            cluster_points = [seed_point]
+
+            print(
+                f"        Cluster {cluster_id}: Started with seed at {seed_point['latitude']}, {seed_point['longitude']}"
+            )
+
+            # Find all points within cluster radius of the seed
+            remaining = []
+            for point in unclustered:
+                distance = self._calculate_distance(
+                    seed_point["latitude"],
+                    seed_point["longitude"],
+                    point["latitude"],
+                    point["longitude"],
+                )
+                if distance <= cluster_radius_meters:
+                    cluster_points.append(point)
+                    print(f"          Added point {distance:.0f}m away")
+                else:
+                    remaining.append(point)
+
+            unclustered = remaining
+
+            print(
+                f"        Cluster {cluster_id}: Final size {len(cluster_points)} points"
+            )
+
+            # Only create location if we have enough points (reduces noise)
+            if len(cluster_points) >= 2:  # Require at least 2 points for a location
+                location = self._create_location_from_cluster(cluster_points)
+                if location:
+                    locations.append(location)
+                    print(f"        ✅ Created location from cluster {cluster_id}")
+                else:
+                    print(
+                        f"        ❌ Failed to create location from cluster {cluster_id}"
+                    )
+            else:
+                print(
+                    f"        ⚠️  Skipping cluster {cluster_id} (too few points: {len(cluster_points)})"
+                )
+
+            cluster_id += 1
+
+        print(
+            f"      📊 Clustering complete: {len(locations)} locations from {len(location_data)} GPS points"
+        )
+        return locations
+
+    def _calculate_distance(self, lat1, lon1, lat2, lon2):
+        """Calculate distance between two points in meters using Haversine formula."""
+        lat1, lon1, lat2, lon2 = map(
+            math.radians, [float(lat1), float(lon1), float(lat2), float(lon2)]
+        )
+
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        )
+        c = 2 * math.asin(math.sqrt(a))
+        r = 6371000  # Earth's radius in meters
+
+        return c * r
+
+    def _create_location_from_cluster(self, cluster_points: list):
+        """Create a Location object from a cluster of GPS points."""
+        if not cluster_points:
+            return None
+
+        try:
+            # Calculate center coordinates (simple average)
+            center_lat = sum(
+                float(point["latitude"]) for point in cluster_points
+            ) / len(cluster_points)
+            center_lon = sum(
+                float(point["longitude"]) for point in cluster_points
+            ) / len(cluster_points)
+
+            # Sort by timestamp to get first and last visits
+            cluster_points.sort(key=lambda x: x["timestamp"])
+            first_visit = cluster_points[0]["timestamp"]
+            last_visit = cluster_points[-1]["timestamp"]
+
+            # Count activity types
+            activity_types = {}
+            for point in cluster_points:
+                activity = point.get("activity_type")
+                if activity:
+                    activity_types[activity] = activity_types.get(activity, 0) + 1
+
+            # Get a name (use location_name if available, otherwise use address)
+            location_name = ""
+            for point in cluster_points:
+                if point.get("location_name"):
+                    location_name = point["location_name"]
+                    break
+
+            location_address = ""
+            for point in cluster_points:
+                if point.get("address"):
+                    location_address = point["address"]
+                    break
+
+            # Estimate time spent (rough calculation based on point density)
+            total_time_minutes = len(cluster_points) * 30  # 30 minutes per GPS point
+
+            # Create Location object
+            location = Location.objects.create(
+                time_analysis=self,
+                name=location_name,
+                center_latitude=center_lat,
+                center_longitude=center_lon,
+                visit_count=len(cluster_points),
+                total_time_minutes=total_time_minutes,
+                first_visit=first_visit,
+                last_visit=last_visit,
+                address=location_address,
+                activity_types=activity_types,
+            )
+
+            print(f"      ✅ Created location: {location}")
+            return location
+
+        except Exception as e:
+            print(f"      ❌ Error creating location from cluster: {e}")
+            logger.error(f"Error creating location from cluster: {e}")
+            return None
 
     def _analyze_sentiment_batch(
         self, comprehend, text_list: list[str]
@@ -583,3 +892,64 @@ class Message(models.Model):
             return "Negative"
         else:
             return "Neutral"
+
+
+class Location(models.Model):
+    """Model for storing clustered locations from GPS data."""
+
+    time_analysis = models.ForeignKey(
+        TimeAnalysis, on_delete=models.CASCADE, related_name="locations"
+    )
+    name = models.CharField(
+        max_length=200, blank=True, help_text="Name or description of this location"
+    )
+    center_latitude = models.DecimalField(
+        max_digits=10,
+        decimal_places=8,
+        help_text="Center latitude of clustered GPS points",
+    )
+    center_longitude = models.DecimalField(
+        max_digits=11,
+        decimal_places=8,
+        help_text="Center longitude of clustered GPS points",
+    )
+    visit_count = models.PositiveIntegerField(
+        default=0, help_text="Number of GPS points in this cluster"
+    )
+    total_time_minutes = models.PositiveIntegerField(
+        default=0, help_text="Total time spent at this location in minutes"
+    )
+    first_visit = models.DateTimeField(
+        null=True, blank=True, help_text="First recorded visit to this location"
+    )
+    last_visit = models.DateTimeField(
+        null=True, blank=True, help_text="Last recorded visit to this location"
+    )
+    address = models.TextField(
+        null=True, blank=True, help_text="Address of this location"
+    )
+    activity_types = models.JSONField(
+        default=dict, help_text="Activity types and their counts at this location"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Location"
+        verbose_name_plural = "Locations"
+        ordering = ["-visit_count"]
+
+    def __str__(self):
+        name = self.name or f"{self.center_latitude}, {self.center_longitude}"
+        return f"{name} ({self.visit_count} visits, {self.total_time_minutes}min)"
+
+    @property
+    def coordinates(self):
+        """Return center coordinates as a tuple."""
+        return (float(self.center_latitude), float(self.center_longitude))
+
+    @property
+    def average_time_per_visit(self):
+        """Return average time per visit in minutes."""
+        if self.visit_count > 0:
+            return self.total_time_minutes / self.visit_count
+        return 0
