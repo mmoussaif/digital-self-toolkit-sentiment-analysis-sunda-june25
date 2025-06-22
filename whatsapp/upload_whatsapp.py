@@ -49,8 +49,20 @@ def save_whatsapp_messages_to_supabase(supabase_client, whatsapp_messages: list)
         }
         db_entries.append(db_entry)
 
-    # Insert all entries at once
-    result = supabase_client.table("whatsapp_messages").insert(db_entries).execute()
+    # Remove duplicates within the batch based on ID
+    seen_ids = set()
+    unique_entries = []
+    for entry in db_entries:
+        if entry["id"] not in seen_ids:
+            seen_ids.add(entry["id"])
+            unique_entries.append(entry)
+
+    print(
+        f"📊 Filtered {len(db_entries)} messages down to {len(unique_entries)} unique messages"
+    )
+
+    # Use upsert to handle duplicate keys gracefully
+    result = supabase_client.table("whatsapp_messages").upsert(unique_entries).execute()
     return result
 
 
