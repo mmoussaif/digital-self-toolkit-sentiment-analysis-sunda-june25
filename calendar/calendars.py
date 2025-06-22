@@ -130,7 +130,7 @@ def get_recent_events(count=10, days_back=30):
 
         if all_events:
             # Save all events to JSON file
-            filename = f"recent_events_{len(all_events)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            filename = f"data/recent_events_{len(all_events)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             with open(filename, "w", encoding="utf-8") as f:
                 json.dump(all_events, f, indent=2, ensure_ascii=False)
 

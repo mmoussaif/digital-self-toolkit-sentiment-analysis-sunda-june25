@@ -1,0 +1,24 @@
+{
+  "name": "toolkit",
+  "version": "1.0.0",
+  "description": "Personal data toolkit for extracting and analyzing various data sources",
+  "type": "module",
+  "scripts": {
+    "screen-history": "node screen-history/screen_history.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@screenpipe/js": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
+  "keywords": [
+    "data-extraction",
+    "automation",
+    "screenpipe",
+    "toolkit"
+  ],
+  "author": "",
+  "license": "MIT"
+} 

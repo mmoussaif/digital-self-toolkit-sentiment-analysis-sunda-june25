@@ -14,7 +14,7 @@ def main():
     """Export iMessage data to data/messages.json using imessage-reader package"""
     try:
         # Default path to chat.db on macOS
-        db_path = Path.home() / "Library" / "Messages" / "chat.db"
+        db_path = Path("data/chat.db")
 
         # If chat.db doesn't exist in default location, try local data directory
         if not db_path.exists():

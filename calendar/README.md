@@ -15,7 +15,7 @@ Follow the same setup steps as in the [Gmail README](../gmail/README.md), but en
 Run the script:
 
 ```bash
-python calendar.py
+python calendar2.py
 ```
 
 On first run, it will use the same authentication flow as the Gmail script. The `token.json` file will be updated with Calendar API permissions.
@@ -27,3 +27,5 @@ The script will create a JSON file with a timestamp in the filename (e.g., `rece
 - Attendees information
 - Recurrence rules if applicable
 - Timestamp of when the events were saved
+
+Note that we cannot call the file "calendar.py" because it interferes.

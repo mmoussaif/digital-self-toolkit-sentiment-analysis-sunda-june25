@@ -1,4 +1,6 @@
-data/**
+node_modules/
+
+**/data/**
 !data/.gitkeep
 token.json
 credentials.json

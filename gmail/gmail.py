@@ -169,7 +169,7 @@ def get_recent_emails(count=10):
 
         if all_emails:
             # Save all emails to JSON file
-            filename = f"recent_emails_{len(all_emails)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            filename = f"data/recent_emails_{len(all_emails)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             with open(filename, "w", encoding="utf-8") as f:
                 json.dump(all_emails, f, indent=2, ensure_ascii=False)
 

@@ -1,0 +1,38 @@
+# WhatsApp session data (contains authentication tokens)
+session.db
+session.db-wal
+session.db-shm
+
+# Logs
+logs/
+*.log
+
+# Extracted message data (may contain private information)
+data/*.json
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db 
