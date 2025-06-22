@@ -48,6 +48,8 @@ class TimeAnalysis(models.Model):
         super().save(*args, **kwargs)
 
         if is_new and self.status == "pending":
+            print(f"🚀 New TimeAnalysis created: {self.name}")
+            print(f"📅 Date range: {self.start_date} to {self.end_date}")
             self.perform_sentiment_analysis()
 
     def perform_sentiment_analysis(self):
@@ -55,29 +57,47 @@ class TimeAnalysis(models.Model):
         Perform sentiment analysis on all messages within the date range.
         Groups messages by day and calculates average sentiment using AWS Comprehend.
         """
+        print("🔄 Starting sentiment analysis...")
+
+        # Clear ALL existing Day objects (from all TimeAnalyses)
+        existing_days_count = Day.objects.count()
+        if existing_days_count > 0:
+            print(f"🗑️  Clearing {existing_days_count} existing Day records...")
+            Day.objects.all().delete()
+            print("✅ All existing Day records cleared")
+        else:
+            print("ℹ️  No existing Day records to clear")
+
         self.status = "processing"
         self.save(update_fields=["status"])
+        print(f"📊 Status updated to: {self.status}")
 
         # Initialize Supabase client
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_ANON_KEY")
 
+        print("🔗 Checking Supabase credentials...")
         if not supabase_url or not supabase_key:
+            print("❌ Supabase credentials not configured")
             self.status = "error"
             self.error_message = "Supabase credentials not configured"
             self.save(update_fields=["status", "error_message"])
             return
+        print("✅ Supabase credentials found")
 
         # Initialize AWS Comprehend client
         aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
         aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
         aws_region = os.getenv("AWS_REGION", "us-east-1")
 
+        print("🔑 Checking AWS credentials...")
         if not aws_access_key or not aws_secret_key:
+            print("❌ AWS credentials not configured")
             self.status = "error"
             self.error_message = "AWS credentials not configured"
             self.save(update_fields=["status", "error_message"])
             return
+        print(f"✅ AWS credentials found for region: {aws_region}")
 
         supabase: Client = create_client(supabase_url, supabase_key)
         comprehend = boto3.client(
@@ -90,16 +110,27 @@ class TimeAnalysis(models.Model):
         # Group messages by day
         daily_messages = defaultdict(list)
 
+        print("📱 Fetching messages from different sources...")
         # Query iMessages
+        print("  📩 Querying iMessages...")
         self._fetch_imessages(supabase, daily_messages)
 
         # Query WhatsApp messages
+        print("  💬 Querying WhatsApp messages...")
         self._fetch_whatsapp_messages(supabase, daily_messages)
 
         # Query Gmail emails
+        print("  ✉️  Querying Gmail emails...")
         self._fetch_gmail_emails(supabase, daily_messages)
 
+        total_days_with_messages = len(daily_messages)
+        total_messages = sum(len(messages) for messages in daily_messages.values())
+        print(
+            f"📊 Found {total_messages} messages across {total_days_with_messages} days"
+        )
+
         # Process messages in batches using BatchDetectSentiment
+        print("🔍 Processing messages for sentiment analysis...")
         daily_data = []
         for date_str, messages in daily_messages.items():
             if not messages:
@@ -112,8 +143,10 @@ class TimeAnalysis(models.Model):
             if not combined_text.strip():
                 continue
 
+            # Truncate if too long for AWS Comprehend
             if len(combined_text.encode("utf-8")) > 5000:
                 combined_text = combined_text[:4900] + "..."
+                print(f"  ✂️  Truncated messages for {date_str} (too long)")
 
             daily_data.append(
                 {
@@ -122,12 +155,25 @@ class TimeAnalysis(models.Model):
                     "message_count": len(messages),
                 }
             )
+            print(f"  📅 {date_str}: {len(messages)} messages combined")
+
+        print(f"🎯 Prepared {len(daily_data)} days for sentiment analysis")
 
         # Process in batches of 25 (AWS Comprehend BatchDetectSentiment limit)
         batch_size = 25
+        total_batches = (len(daily_data) + batch_size - 1) // batch_size
+        created_days = 0
+
+        print(f"🔄 Processing {len(daily_data)} days in {total_batches} batches...")
+
         for i in range(0, len(daily_data), batch_size):
+            batch_num = (i // batch_size) + 1
             batch = daily_data[i : i + batch_size]
             text_list = [item["text"] for item in batch]
+
+            print(
+                f"  📦 Processing batch {batch_num}/{total_batches} ({len(batch)} days)..."
+            )
 
             # Analyze sentiment for the batch
             sentiment_results = self._analyze_sentiment_batch(comprehend, text_list)
@@ -140,19 +186,30 @@ class TimeAnalysis(models.Model):
                             date_obj = datetime.strptime(
                                 batch[j]["date_str"], "%Y-%m-%d"
                             ).date()
-                            Day.objects.create(
+                            day = Day.objects.create(
                                 time_analysis=self,
                                 date=date_obj,
                                 sentiment=result,
                                 message_count=batch[j]["message_count"],
                             )
+                            created_days += 1
+                            print(
+                                f"    ✅ Created Day: {date_obj} (sentiment: {result:.3f}, {batch[j]['message_count']} msgs)"
+                            )
                         except Exception as e:
+                            print(
+                                f"    ❌ Error creating Day for {batch[j]['date_str']}: {e}"
+                            )
                             logger.error(
                                 f"Error creating Day object for {batch[j]['date_str']}: {e}"
                             )
 
+            print(f"  ✅ Batch {batch_num}/{total_batches} completed")
+
+        print(f"🎉 Analysis complete! Created {created_days} Day records")
         self.status = "completed"
         self.save(update_fields=["status"])
+        print(f"📊 Status updated to: {self.status}")
 
     def _fetch_imessages(self, supabase: Client, daily_messages: dict):
         """Fetch iMessages from Supabase and group by day."""
@@ -165,6 +222,7 @@ class TimeAnalysis(models.Model):
                 .execute()
             )
 
+            print(f"    📱 Found {len(response.data)} iMessages")
             for message in response.data:
                 if message.get("text"):
                     # Parse timestamp and extract date
@@ -198,6 +256,7 @@ class TimeAnalysis(models.Model):
                 .execute()
             )
 
+            print(f"    💬 Found {len(response.data)} WhatsApp messages")
             for message in response.data:
                 if message.get("text"):
                     try:
@@ -222,6 +281,7 @@ class TimeAnalysis(models.Model):
                 .execute()
             )
 
+            print(f"    ✉️  Found {len(response.data)} Gmail emails")
             for email in response.data:
                 if email.get("body_text"):
                     try:

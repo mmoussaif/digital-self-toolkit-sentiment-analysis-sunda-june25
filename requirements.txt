@@ -13,6 +13,8 @@ python-dotenv
 
 # Django
 Django
+djangorestframework
+django-filter
 
 # AWS Comprehend
 boto3
