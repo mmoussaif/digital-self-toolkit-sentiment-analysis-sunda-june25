@@ -1,10 +1,34 @@
 from rest_framework import serializers
 
-from .models import Day, TimeAnalysis
+from .models import Day, Message, TimeAnalysis
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    """Serializer for individual message sentiment data."""
+
+    sentiment_label = serializers.ReadOnlyField()
+
+    class Meta:
+        model = Message
+        fields = [
+            "id",
+            "text",
+            "sentiment",
+            "sentiment_label",
+            "source",
+            "contact",
+            "timestamp",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at", "sentiment_label"]
 
 
 class DaySerializer(serializers.ModelSerializer):
+    """Serializer for daily sentiment analysis results."""
+
     sentiment_label = serializers.ReadOnlyField()
+    happiest_messages = MessageSerializer(many=True, read_only=True)
+    saddest_messages = MessageSerializer(many=True, read_only=True)
 
     class Meta:
         model = Day
@@ -14,13 +38,23 @@ class DaySerializer(serializers.ModelSerializer):
             "sentiment",
             "sentiment_label",
             "message_count",
+            "happiest_messages",
+            "saddest_messages",
             "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "sentiment_label",
+            "happiest_messages",
+            "saddest_messages",
         ]
 
 
 class TimeAnalysisSerializer(serializers.ModelSerializer):
+    """Serializer for time analysis with related days."""
+
     days = DaySerializer(many=True, read_only=True)
-    days_count = serializers.SerializerMethodField()
 
     class Meta:
         model = TimeAnalysis
@@ -35,22 +69,26 @@ class TimeAnalysisSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "days",
-            "days_count",
         ]
-        read_only_fields = ["status", "error_message", "created_at", "updated_at"]
-
-    def get_days_count(self, obj):
-        return obj.days.count()
+        read_only_fields = [
+            "id",
+            "status",
+            "error_message",
+            "created_at",
+            "updated_at",
+            "days",
+        ]
 
 
 class TimeAnalysisCreateSerializer(serializers.ModelSerializer):
-    """Simplified serializer for creating TimeAnalysis instances."""
+    """Serializer for creating new time analysis."""
 
     class Meta:
         model = TimeAnalysis
         fields = ["name", "description", "start_date", "end_date"]
 
     def validate(self, data):
-        if data["start_date"] > data["end_date"]:
-            raise serializers.ValidationError("Start date must be before end date.")
+        """Validate that end_date is after start_date."""
+        if data["start_date"] >= data["end_date"]:
+            raise serializers.ValidationError("End date must be after start date.")
         return data

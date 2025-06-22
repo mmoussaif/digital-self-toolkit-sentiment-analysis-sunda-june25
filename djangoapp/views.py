@@ -1,13 +1,15 @@
 from datetime import datetime
 
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import status, viewsets
+from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .models import Day, TimeAnalysis
+from .filters import MessageFilter
+from .models import Day, Message, TimeAnalysis
 from .serializers import (
     DaySerializer,
+    MessageSerializer,
     TimeAnalysisCreateSerializer,
     TimeAnalysisSerializer,
 )
@@ -114,3 +116,58 @@ class DayViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(time_analysis_id=time_analysis_id)
 
         return queryset.select_related("time_analysis").order_by("date")
+
+
+class MessageViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for viewing individual messages.
+    Provides filtering by sentiment, source, date, etc.
+    """
+
+    queryset = Message.objects.all()
+    serializer_class = MessageSerializer
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
+    filterset_class = MessageFilter
+    search_fields = ["text", "contact"]
+    ordering_fields = ["sentiment", "created_at", "day__date"]
+    ordering = ["-sentiment"]  # Default to happiest first
+
+    @action(detail=False, methods=["get"])
+    def happiest(self, request):
+        """Get the happiest messages across all days."""
+        limit = int(request.query_params.get("limit", 10))
+        time_analysis_id = request.query_params.get("time_analysis")
+        day_date = request.query_params.get("date")
+
+        queryset = self.get_queryset().order_by("-sentiment")
+
+        if time_analysis_id:
+            queryset = queryset.filter(day__time_analysis_id=time_analysis_id)
+        if day_date:
+            queryset = queryset.filter(day__date=day_date)
+
+        messages = queryset[:limit]
+        serializer = self.get_serializer(messages, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def saddest(self, request):
+        """Get the saddest messages across all days."""
+        limit = int(request.query_params.get("limit", 10))
+        time_analysis_id = request.query_params.get("time_analysis")
+        day_date = request.query_params.get("date")
+
+        queryset = self.get_queryset().order_by("sentiment")
+
+        if time_analysis_id:
+            queryset = queryset.filter(day__time_analysis_id=time_analysis_id)
+        if day_date:
+            queryset = queryset.filter(day__date=day_date)
+
+        messages = queryset[:limit]
+        serializer = self.get_serializer(messages, many=True)
+        return Response(serializer.data)

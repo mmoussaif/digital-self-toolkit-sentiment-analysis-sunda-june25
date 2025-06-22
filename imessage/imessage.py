@@ -121,19 +121,102 @@ def extract_imessage_data():
     # Get all messages
     messages = fd.get_messages()
 
+    # Debug: Print the first few messages to understand the tuple structure
+    print(f"🔍 Debug: Found {len(messages)} total messages")
+    if messages:
+        print("🔍 Debug: First message tuple structure:")
+        first_msg = messages[0]
+        print(f"  Tuple length: {len(first_msg)}")
+        for i, item in enumerate(first_msg):
+            print(f"  Index {i}: {repr(item)} (type: {type(item).__name__})")
+        print()
+
     # Convert to more structured format
     structured_messages = []
     for msg in messages:
-        # msg is a tuple: (user_id, message, service, account, is_from_me, timestamp)
-        structured_msg = {
-            "contact": msg[0] if msg[0] else "Unknown",
-            "text": msg[1] if msg[1] else "",
-            "service": msg[2] if msg[2] else "Unknown",
-            "account": msg[3] if msg[3] else "",
-            "is_from_me": bool(msg[4]) if len(msg) > 4 else False,
-            "timestamp": msg[5] if len(msg) > 5 else "",
-        }
-        structured_messages.append(structured_msg)
+        # Based on documentation and research, the tuple structure appears to be:
+        # (user_id, message, date, service, account, is_from_me, ...)
+        # But let's be more defensive about accessing the fields
+
+        try:
+            # Safely extract fields with bounds checking
+            contact = msg[0] if len(msg) > 0 and msg[0] else "Unknown"
+            text = msg[1] if len(msg) > 1 and msg[1] else ""
+
+            # The actual position of is_from_me may vary, let's check multiple positions
+            is_from_me = False
+            if len(msg) > 5:
+                # Check if position 5 contains boolean-like data
+                potential_is_from_me = msg[5]
+                if isinstance(potential_is_from_me, (bool, int)):
+                    is_from_me = bool(potential_is_from_me)
+                    print(
+                        f"🔍 Debug: Found is_from_me at position 5: {is_from_me} for message: '{text[:50]}...'"
+                    )
+                else:
+                    print(
+                        f"🔍 Debug: Position 5 is not boolean/int: {type(potential_is_from_me)} = {potential_is_from_me}"
+                    )
+
+            # Try alternative positions for is_from_me
+            if len(msg) > 4 and not isinstance(msg[4], str):
+                potential_is_from_me = msg[4]
+                if isinstance(potential_is_from_me, (bool, int)):
+                    is_from_me = bool(potential_is_from_me)
+                    print(
+                        f"🔍 Debug: Found is_from_me at position 4: {is_from_me} for message: '{text[:50]}...'"
+                    )
+
+            # Extract other fields safely
+            service = msg[2] if len(msg) > 2 and msg[2] else "Unknown"
+            account = msg[3] if len(msg) > 3 and msg[3] else ""
+            timestamp = (
+                msg[4]
+                if len(msg) > 4 and isinstance(msg[4], str)
+                else (msg[2] if len(msg) > 2 and isinstance(msg[2], str) else "")
+            )
+
+            # If we find a date-like string, use it as timestamp
+            for i in range(len(msg)):
+                if (
+                    isinstance(msg[i], str)
+                    and len(msg[i]) > 10
+                    and ("-" in msg[i] or ":" in msg[i])
+                ):
+                    timestamp = msg[i]
+                    break
+
+            structured_msg = {
+                "contact": contact,
+                "text": text,
+                "service": service,
+                "account": account,
+                "is_from_me": is_from_me,
+                "timestamp": timestamp,
+            }
+            structured_messages.append(structured_msg)
+
+        except Exception as e:
+            print(f"⚠️  Error processing message tuple {msg}: {e}")
+            continue
+
+    # Additional debugging - show some sample structured messages
+    print(f"🔍 Debug: Processed {len(structured_messages)} messages")
+    if structured_messages:
+        print("🔍 Debug: Sample structured messages:")
+        for i, msg in enumerate(structured_messages[:5]):
+            print(
+                f"  Message {i + 1}: is_from_me={msg['is_from_me']}, text='{msg['text'][:50]}...'"
+            )
+
+        # Count messages by is_from_me
+        from_me_count = sum(1 for msg in structured_messages if msg["is_from_me"])
+        not_from_me_count = sum(
+            1 for msg in structured_messages if not msg["is_from_me"]
+        )
+        print(
+            f"🔍 Debug: Messages from me: {from_me_count}, Messages not from me: {not_from_me_count}"
+        )
 
     return structured_messages
 
