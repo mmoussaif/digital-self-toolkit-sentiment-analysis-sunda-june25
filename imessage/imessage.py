@@ -16,41 +16,83 @@ from imessage_reader import fetch_data
 from databases.helpers import get_supabase_client, save_data_to_json
 
 
-def save_imessages_to_supabase(supabase_client, imessages: list):
-    """Save iMessage data to Supabase database."""
+def save_imessages_to_supabase(supabase_client, imessages: list, batch_size: int = 100):
+    """Save iMessage data to Supabase database in batches."""
 
-    # Limit to first 100 messages to avoid timeout
-    limited_messages = imessages[:100]
+    if not imessages:
+        print("No messages to process")
+        return None
+
+    total_messages = len(imessages)
+    total_batches = (total_messages + batch_size - 1) // batch_size  # Ceiling division
+    successful_inserts = 0
+    failed_batches = []
+
     print(
-        f"Processing first {len(limited_messages)} messages out of {len(imessages)} total"
+        f"Processing {total_messages} messages in {total_batches} batches of {batch_size}"
     )
 
-    # Transform entries for database storage
-    db_entries = []
-    for msg in limited_messages:
-        # Truncate very long messages to prevent index issues
-        text = msg["text"] or ""
-        if len(text.encode("utf-8")) > 1000:
-            text = text[:1000] + "..." if len(text) > 1000 else text
+    for batch_num in range(total_batches):
+        start_idx = batch_num * batch_size
+        end_idx = min(start_idx + batch_size, total_messages)
+        batch_messages = imessages[start_idx:end_idx]
 
-        # Truncate contact name
-        contact = msg["contact"] or ""
-        if len(contact.encode("utf-8")) > 500:
-            contact = contact[:500] + "..." if len(contact) > 500 else contact
+        print(
+            f"Processing batch {batch_num + 1}/{total_batches} ({len(batch_messages)} messages)..."
+        )
 
-        db_entry = {
-            "contact": contact,
-            "text": text,
-            "service": msg["service"],
-            "account": msg["account"],
-            "is_from_me": msg["is_from_me"],
-            "timestamp": msg["timestamp"],
-        }
-        db_entries.append(db_entry)
+        # Transform entries for database storage
+        db_entries = []
+        for msg in batch_messages:
+            # Truncate very long messages to prevent index issues
+            text = msg["text"] or ""
+            if len(text.encode("utf-8")) > 1000:
+                text = text[:1000] + "..." if len(text) > 1000 else text
 
-    # Insert all entries at once
-    result = supabase_client.table("imessages").insert(db_entries).execute()
-    return result
+            # Truncate contact name
+            contact = msg["contact"] or ""
+            if len(contact.encode("utf-8")) > 500:
+                contact = contact[:500] + "..." if len(contact) > 500 else contact
+
+            db_entry = {
+                "contact": contact,
+                "text": text,
+                "service": msg["service"],
+                "account": msg["account"],
+                "is_from_me": msg["is_from_me"],
+                "timestamp": msg["timestamp"],
+            }
+            db_entries.append(db_entry)
+
+        # Insert batch to Supabase
+        try:
+            result = supabase_client.table("imessages").insert(db_entries).execute()
+            if result and result.data:
+                successful_inserts += len(result.data)
+                print(
+                    f"✅ Batch {batch_num + 1} completed: {len(result.data)} messages saved"
+                )
+            else:
+                print(f"❌ Batch {batch_num + 1} failed: No data returned")
+                failed_batches.append(batch_num + 1)
+        except Exception as e:
+            print(f"❌ Batch {batch_num + 1} failed with error: {str(e)}")
+            failed_batches.append(batch_num + 1)
+            continue
+
+    # Summary
+    print("\n📊 Batch processing complete:")
+    print(f"  - Total messages processed: {total_messages}")
+    print(f"  - Successfully inserted: {successful_inserts}")
+    print(f"  - Failed batches: {len(failed_batches)}")
+    if failed_batches:
+        print(f"  - Failed batch numbers: {failed_batches}")
+
+    return {
+        "total_messages": total_messages,
+        "successful_inserts": successful_inserts,
+        "failed_batches": failed_batches,
+    }
 
 
 def extract_imessage_data():
@@ -103,8 +145,14 @@ def save_imessages_data(imessages: list):
     if supabase_client:
         print(f"Saving {len(imessages)} iMessages to Supabase...")
         result = save_imessages_to_supabase(supabase_client, imessages)
-        if result and result.data:
-            print(f"✅ Successfully saved {len(result.data)} iMessages to Supabase")
+        if result and result.get("successful_inserts", 0) > 0:
+            print(
+                f"✅ Successfully saved {result['successful_inserts']} iMessages to Supabase"
+            )
+            if result.get("failed_batches"):
+                print(
+                    f"⚠️  {len(result['failed_batches'])} batches failed - some data may not have been saved"
+                )
         else:
             print("❌ Failed to save to Supabase, falling back to JSON...")
             save_data_to_json(imessages, "imessages", "imessage/data", "failed_")
