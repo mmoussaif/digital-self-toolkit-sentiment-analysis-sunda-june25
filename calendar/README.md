@@ -28,4 +28,4 @@ The script will create a JSON file with a timestamp in the filename (e.g., `rece
 - Recurrence rules if applicable
 - Timestamp of when the events were saved
 
-Note that we cannot call the file "calendar.py" because it interferes.
+Note that we cannot name the file "calendar.py" because it interferes.
