@@ -10,3 +10,6 @@ google-auth
 # Supabase
 supabase
 python-dotenv
+
+# Django
+Django
