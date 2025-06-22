@@ -1,5 +1,4 @@
 import base64
-import json
 import os
 from datetime import datetime
 
@@ -9,8 +8,68 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from databases.helpers import get_supabase_client, save_data_to_json
+
 # Gmail API scope for reading emails
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+
+
+def save_email_to_supabase(supabase_client, email_data: dict):
+    """Save email data to Supabase database."""
+
+    # Transform the data to match the database schema
+    db_email = {
+        "id": email_data["id"],
+        "thread_id": email_data["thread_id"],
+        "label_ids": email_data["label_ids"],
+        "snippet": email_data["snippet"],
+        "history_id": email_data["history_id"],
+        "internal_date": int(email_data["internal_date"])
+        if email_data["internal_date"]
+        else None,
+        "headers": email_data["headers"],
+        "mime_type": email_data["mime_type"],
+        "body_text": email_data["body"]["text"],
+        "body_html": email_data["body"]["html"],
+        "saved_at": email_data["saved_at"],
+    }
+
+    result = supabase_client.table("gmail_emails").insert(db_email).execute()
+    return result
+
+
+def save_emails_data(all_emails: list):
+    """Save emails data to Supabase if configured, otherwise save to JSON."""
+    supabase_client = get_supabase_client("gmail_emails")
+
+    if supabase_client:
+        print(f"Saving {len(all_emails)} emails to Supabase...")
+
+        successful_saves = 0
+        failed_emails = []
+
+        for i, email_data in enumerate(all_emails, 1):
+            print(f"Saving email {i}/{len(all_emails)} to Supabase...")
+            result = save_email_to_supabase(supabase_client, email_data)
+            if result and result.data:
+                successful_saves += 1
+                print(f"  ✅ Email {i} saved successfully")
+            else:
+                print(f"  ❌ Failed to save email {i}")
+                failed_emails.append(email_data)
+
+        print(
+            f"\n📊 Results: {successful_saves}/{len(all_emails)} emails saved to Supabase"
+        )
+
+        # Save failed emails to JSON as backup
+        if failed_emails:
+            print(f"💾 Saving {len(failed_emails)} failed emails to JSON as backup...")
+            save_data_to_json(failed_emails, "recent_emails", "gmail/data", "failed_")
+    else:
+        # Fallback to JSON if Supabase not configured
+        print("Supabase not configured, saving to JSON...")
+        save_data_to_json(all_emails, "recent_emails", "gmail/data")
 
 
 def authenticate_gmail():
@@ -18,8 +77,8 @@ def authenticate_gmail():
     creds = None
 
     # The file token.json stores the user's access and refresh tokens.
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    if os.path.exists("gmail/token.json"):
+        creds = Credentials.from_authorized_user_file("gmail/token.json", SCOPES)
 
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
@@ -27,13 +86,11 @@ def authenticate_gmail():
             creds.refresh(Request())
         else:
             # You need to download credentials.json from Google Cloud Console
-            flow = InstalledAppFlow.from_client_secrets_file(
-                "../credentials.json", SCOPES
-            )
+            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
             creds = flow.run_local_server(port=0)
 
         # Save the credentials for the next run
-        with open("token.json", "w") as token:
+        with open("gmail/token.json", "w") as token:
             token.write(creds.to_json())
 
     return build("gmail", "v1", credentials=creds)
@@ -169,11 +226,7 @@ def get_recent_emails(count=10):
 
         if all_emails:
             # Save all emails to JSON file
-            filename = f"data/recent_emails_{len(all_emails)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            with open(filename, "w", encoding="utf-8") as f:
-                json.dump(all_emails, f, indent=2, ensure_ascii=False)
-
-            print(f"\n{len(all_emails)} emails saved successfully to {filename}")
+            save_emails_data(all_emails)
         else:
             print("No email data was successfully retrieved.")
 

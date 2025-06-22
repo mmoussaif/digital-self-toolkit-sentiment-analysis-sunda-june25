@@ -7,7 +7,7 @@ This script extracts your Google Chrome browsing history and saves it to a JSON 
 Run the script:
 
 ```bash
-python browser-history.py
+python browser_history/browser_history.py
 ```
 
 The script will locate your Chrome history database, extract all browsing history entries, and save the data to `data/chrome_history_YYYYMMDD_HHMMSS.json`.

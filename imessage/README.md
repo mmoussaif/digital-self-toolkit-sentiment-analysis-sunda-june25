@@ -13,7 +13,7 @@ First copy your chat.db file to an accessible place. You must do this in Finder 
 Then run imessage.py to extract:
 
 ```
-python imessage.py
+python imessage/imessage.py
 ```
 
 TODO: Automate copying of chat.db

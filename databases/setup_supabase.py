@@ -113,6 +113,7 @@ class SupabaseSetup:
         CREATE INDEX IF NOT EXISTS idx_gmail_emails_saved_at ON gmail_emails(saved_at);
         CREATE INDEX IF NOT EXISTS idx_gmail_emails_sender ON gmail_emails((headers->>'from'));
         CREATE INDEX IF NOT EXISTS idx_gmail_emails_subject ON gmail_emails((headers->>'subject'));
+        CREATE INDEX IF NOT EXISTS idx_gmail_emails_labels ON gmail_emails USING GIN(label_ids);
         """
 
     def _imessages_table(self) -> str:

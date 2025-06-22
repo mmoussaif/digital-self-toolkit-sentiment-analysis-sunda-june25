@@ -15,7 +15,7 @@ Follow the same setup steps as in the [Gmail README](../gmail/README.md), but en
 Run the script:
 
 ```bash
-python calendar2.py
+python calendar/calendars.py
 ```
 
 On first run, it will use the same authentication flow as the Gmail script. The `token.json` file will be updated with Calendar API permissions.

@@ -9,5 +9,3 @@ Uses Screenpipe https://github.com/mediar-ai/screenpipe
 `curl -fsSL get.screenpi.pe/cli | sh`
 `source ~/.zshrc`
 Start it: `screenpipe`
-
-Run npm run scree
