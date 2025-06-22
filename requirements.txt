@@ -13,3 +13,9 @@ python-dotenv
 
 # Django
 Django
+
+# AWS Comprehend
+boto3
+
+# Date parsing
+python-dateutil
