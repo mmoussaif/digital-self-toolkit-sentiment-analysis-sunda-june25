@@ -3,6 +3,7 @@ import math
 import os
 from collections import defaultdict
 from datetime import datetime
+from urllib.parse import urlparse
 
 import boto3
 from dateutil.parser import parse as parse_date
@@ -230,6 +231,15 @@ class TimeAnalysis(models.Model):
         print(
             f"🎉 Analysis complete! Created {created_days} Day records and {created_messages} Message records"
         )
+
+        # SECOND PASS: Website correlation analysis
+        print("\n🌐 Starting website correlation analysis (second pass)...")
+        self._analyze_website_correlations(supabase)
+
+        # THIRD PASS: Person correlation analysis
+        print("\n👥 Starting person correlation analysis (third pass)...")
+        self._analyze_person_correlations(daily_messages)
+
         self.status = "completed"
         self.save(update_fields=["status"])
         print(f"📊 Status updated to: {self.status}")
@@ -796,6 +806,510 @@ class TimeAnalysis(models.Model):
             logger.error(f"Error in batch sentiment analysis: {e}")
             return [None] * len(text_list)
 
+    def _analyze_website_correlations(self, supabase: Client):
+        """
+        Second pass: Analyze correlation between website visits and daily sentiment scores.
+        """
+        print("🔍 Fetching browser history data...")
+
+        # Clear existing WebsiteAnalysis records for this TimeAnalysis
+        existing_website_count = WebsiteAnalysis.objects.filter(
+            time_analysis=self
+        ).count()
+        if existing_website_count > 0:
+            print(
+                f"🗑️  Clearing {existing_website_count} existing WebsiteAnalysis records..."
+            )
+            WebsiteAnalysis.objects.filter(time_analysis=self).delete()
+            print("✅ Existing WebsiteAnalysis records cleared")
+
+        # Fetch browser history for the date range
+        daily_website_visits = defaultdict(set)  # date_str -> set of domains
+        domain_example_urls = {}  # domain -> example_url
+        self._fetch_browser_history(supabase, daily_website_visits, domain_example_urls)
+
+        # Get all days with sentiment scores
+        days_with_sentiment = Day.objects.filter(
+            time_analysis=self, sentiment__isnull=False
+        ).order_by("date")
+        if not days_with_sentiment.exists():
+            print(
+                "❌ No days with sentiment scores found for website correlation analysis"
+            )
+            return
+
+        print(f"📊 Found {days_with_sentiment.count()} days with sentiment scores")
+
+        # Collect all unique domains
+        all_domains = set()
+        for domains in daily_website_visits.values():
+            all_domains.update(domains)
+
+        print(f"🌐 Found {len(all_domains)} unique website domains")
+
+        if not all_domains:
+            print("❌ No browser history data found for correlation analysis")
+            return
+
+        # Calculate correlations for each domain
+        website_analyses = []
+        for domain in all_domains:
+            print(f"  📈 Analyzing correlation for {domain}...")
+            correlation_data = self._calculate_domain_correlation(
+                domain, days_with_sentiment, daily_website_visits
+            )
+
+            if correlation_data:
+                website_analysis = WebsiteAnalysis.objects.create(
+                    time_analysis=self,
+                    domain=domain,
+                    example_url=domain_example_urls.get(domain, ""),
+                    correlation_coefficient=correlation_data["correlation"],
+                    days_visited=correlation_data["days_visited"],
+                    days_not_visited=correlation_data["days_not_visited"],
+                    avg_sentiment_when_visited=correlation_data[
+                        "avg_sentiment_visited"
+                    ],
+                    avg_sentiment_when_not_visited=correlation_data[
+                        "avg_sentiment_not_visited"
+                    ],
+                    total_visits=correlation_data["total_visits"],
+                    significance_score=correlation_data["significance_score"],
+                )
+                website_analyses.append(website_analysis)
+
+        print(
+            f"🎉 Website correlation analysis complete! Created {len(website_analyses)} WebsiteAnalysis records"
+        )
+
+        # Show top correlations
+        if website_analyses:
+            print("\n📊 Top positive correlations (websites that make you happier):")
+            positive_correlations = sorted(
+                [wa for wa in website_analyses if wa.correlation_coefficient > 0],
+                key=lambda x: x.correlation_coefficient,
+                reverse=True,
+            )[:5]
+            for wa in positive_correlations:
+                print(
+                    f"  🟢 {wa.domain}: {wa.correlation_coefficient:.3f} (visited {wa.days_visited} days)"
+                )
+
+            print("\n📊 Top negative correlations (websites that make you sadder):")
+            negative_correlations = sorted(
+                [wa for wa in website_analyses if wa.correlation_coefficient < 0],
+                key=lambda x: x.correlation_coefficient,
+            )[:5]
+            for wa in negative_correlations:
+                print(
+                    f"  🔴 {wa.domain}: {wa.correlation_coefficient:.3f} (visited {wa.days_visited} days)"
+                )
+
+    def _fetch_browser_history(
+        self, supabase: Client, daily_website_visits: dict, domain_example_urls: dict
+    ):
+        """Fetch browser history from Supabase and group by day and domain."""
+        try:
+            # Convert date range to timestamps for filtering
+            start_datetime = f"{self.start_date} 00:00:00"
+            end_datetime = f"{self.end_date} 23:59:59"
+
+            print(
+                f"    🌐 Querying browser history from {start_datetime} to {end_datetime}"
+            )
+
+            # Fetch browser history with pagination
+            all_visits = []
+            batch_size = 1000
+            offset = 0
+
+            while True:
+                response = (
+                    supabase.table("browser_history")
+                    .select("url, timestamp, visit_count")
+                    .gte("timestamp", start_datetime)
+                    .lte("timestamp", end_datetime)
+                    .range(offset, offset + batch_size - 1)
+                    .execute()
+                )
+
+                if not response.data:
+                    break
+
+                all_visits.extend(response.data)
+                offset += batch_size
+
+                print(
+                    f"      Fetched batch {offset // batch_size}: {len(response.data)} visits (total: {len(all_visits)})"
+                )
+
+                if len(response.data) < batch_size:
+                    break  # No more data
+
+            print(
+                f"    🌐 Found {len(all_visits)} browser history records in date range"
+            )
+
+            # Group visits by date and extract domains
+            for visit in all_visits:
+                if visit.get("url") and visit.get("timestamp"):
+                    try:
+                        # Parse timestamp
+                        parsed_date = parse_date(visit["timestamp"]).date()
+
+                        if self.start_date <= parsed_date <= self.end_date:
+                            # Extract domain from URL
+                            domain = self._extract_domain(visit["url"])
+                            if domain:
+                                date_str = parsed_date.isoformat()
+                                daily_website_visits[date_str].add(domain)
+
+                                # Store example URL for this domain (keep first occurrence)
+                                if domain not in domain_example_urls:
+                                    domain_example_urls[domain] = visit["url"]
+
+                    except Exception as e:
+                        logger.warning(
+                            f"Error parsing browser history timestamp '{visit.get('timestamp')}': {e}"
+                        )
+
+        except Exception as e:
+            print(f"    ❌ Error fetching browser history: {e}")
+            logger.error(f"Error fetching browser history: {e}")
+
+    def _extract_domain(self, url: str) -> str:
+        """Extract domain from URL, removing www. prefix."""
+        try:
+            parsed_url = urlparse(url)
+            domain = parsed_url.netloc.lower()
+
+            # Remove www. prefix
+            if domain.startswith("www."):
+                domain = domain[4:]
+
+            return domain
+        except Exception as e:
+            logger.warning(f"Error extracting domain from URL '{url}': {e}")
+            return ""
+
+    def _calculate_domain_correlation(
+        self, domain: str, days_with_sentiment, daily_website_visits: dict
+    ):
+        """Calculate correlation between domain visits and sentiment scores."""
+        try:
+            # Prepare data for correlation calculation
+            sentiment_scores = []
+            domain_presence = []  # 1 if domain visited, 0 if not
+
+            days_visited = 0
+            days_not_visited = 0
+            sentiment_when_visited = []
+            sentiment_when_not_visited = []
+            total_visits = 0
+
+            for day in days_with_sentiment:
+                date_str = day.date.isoformat()
+                sentiment_scores.append(day.sentiment)
+
+                # Check if domain was visited on this day
+                domains_visited = daily_website_visits.get(date_str, set())
+                if domain in domains_visited:
+                    domain_presence.append(1)
+                    days_visited += 1
+                    sentiment_when_visited.append(day.sentiment)
+                    total_visits += (
+                        1  # Simplified - could count actual visits if needed
+                    )
+                else:
+                    domain_presence.append(0)
+                    days_not_visited += 1
+                    sentiment_when_not_visited.append(day.sentiment)
+
+            # Need at least some visits to calculate meaningful correlation
+            if days_visited < 2 or days_not_visited < 2 or total_visits < 3:
+                print(
+                    f"    ⚠️  Skipping {domain}: insufficient data (visited: {days_visited}, not visited: {days_not_visited}, total visits: {total_visits})"
+                )
+                return None
+
+            # Calculate Pearson correlation coefficient
+            correlation = self._calculate_pearson_correlation(
+                sentiment_scores, domain_presence
+            )
+
+            # Calculate significance score (simple metric based on sample size and correlation strength)
+            significance_score = (
+                abs(correlation) * min(days_visited, days_not_visited) / 10.0
+            )
+
+            return {
+                "correlation": correlation,
+                "days_visited": days_visited,
+                "days_not_visited": days_not_visited,
+                "avg_sentiment_visited": sum(sentiment_when_visited)
+                / len(sentiment_when_visited)
+                if sentiment_when_visited
+                else 0,
+                "avg_sentiment_not_visited": sum(sentiment_when_not_visited)
+                / len(sentiment_when_not_visited)
+                if sentiment_when_not_visited
+                else 0,
+                "total_visits": total_visits,
+                "significance_score": significance_score,
+            }
+
+        except Exception as e:
+            logger.error(f"Error calculating correlation for domain {domain}: {e}")
+            return None
+
+    def _calculate_pearson_correlation(self, x: list, y: list) -> float:
+        """Calculate Pearson correlation coefficient between two lists."""
+        if len(x) != len(y) or len(x) < 2:
+            return 0.0
+
+        n = len(x)
+        sum_x = sum(x)
+        sum_y = sum(y)
+        sum_x_sq = sum(xi * xi for xi in x)
+        sum_y_sq = sum(yi * yi for yi in y)
+        sum_xy = sum(xi * yi for xi, yi in zip(x, y))
+
+        numerator = n * sum_xy - sum_x * sum_y
+        denominator = math.sqrt(
+            (n * sum_x_sq - sum_x * sum_x) * (n * sum_y_sq - sum_y * sum_y)
+        )
+
+        if denominator == 0:
+            return 0.0
+
+        return numerator / denominator
+
+    def _analyze_person_correlations(self, daily_messages: dict):
+        """
+        Third pass: Analyze correlation between interacting with specific people and daily sentiment scores.
+        """
+        print("🔍 Analyzing person interaction data...")
+
+        # Clear existing PersonAnalysis records for this TimeAnalysis
+        existing_person_count = PersonAnalysis.objects.filter(
+            time_analysis=self
+        ).count()
+        if existing_person_count > 0:
+            print(
+                f"🗑️  Clearing {existing_person_count} existing PersonAnalysis records..."
+            )
+            PersonAnalysis.objects.filter(time_analysis=self).delete()
+            print("✅ Existing PersonAnalysis records cleared")
+
+        # Extract person interactions from the daily_messages that were already fetched
+        daily_person_interactions = defaultdict(set)  # date_str -> set of contact names
+        self._extract_person_interactions(daily_messages, daily_person_interactions)
+
+        # Get all days with sentiment scores
+        days_with_sentiment = Day.objects.filter(
+            time_analysis=self, sentiment__isnull=False
+        ).order_by("date")
+        if not days_with_sentiment.exists():
+            print(
+                "❌ No days with sentiment scores found for person correlation analysis"
+            )
+            return
+
+        print(f"📊 Found {days_with_sentiment.count()} days with sentiment scores")
+
+        # Collect all unique contacts
+        all_contacts = set()
+        for contacts in daily_person_interactions.values():
+            all_contacts.update(contacts)
+
+        print(f"👥 Found {len(all_contacts)} unique contacts")
+
+        if not all_contacts:
+            print("❌ No contact interaction data found for correlation analysis")
+            return
+
+        # Calculate correlations for each contact
+        person_analyses = []
+        for contact in all_contacts:
+            print(f"  📈 Analyzing correlation for {contact}...")
+            correlation_data = self._calculate_person_correlation(
+                contact, days_with_sentiment, daily_person_interactions
+            )
+
+            if correlation_data:
+                person_analysis = PersonAnalysis.objects.create(
+                    time_analysis=self,
+                    contact_name=contact,
+                    correlation_coefficient=correlation_data["correlation"],
+                    days_interacted=correlation_data["days_interacted"],
+                    days_not_interacted=correlation_data["days_not_interacted"],
+                    avg_sentiment_when_interacted=correlation_data[
+                        "avg_sentiment_interacted"
+                    ],
+                    avg_sentiment_when_not_interacted=correlation_data[
+                        "avg_sentiment_not_interacted"
+                    ],
+                    total_messages=correlation_data["total_messages"],
+                    significance_score=correlation_data["significance_score"],
+                )
+                person_analyses.append(person_analysis)
+
+        print(
+            f"🎉 Person correlation analysis complete! Created {len(person_analyses)} PersonAnalysis records"
+        )
+
+        # Show top correlations
+        if person_analyses:
+            print("\n📊 Top positive correlations (people who make you happier):")
+            positive_correlations = sorted(
+                [pa for pa in person_analyses if pa.correlation_coefficient > 0],
+                key=lambda x: x.correlation_coefficient,
+                reverse=True,
+            )[:5]
+            for pa in positive_correlations:
+                print(
+                    f"  🟢 {pa.contact_name}: {pa.correlation_coefficient:.3f} (interacted {pa.days_interacted} days)"
+                )
+
+            print("\n📊 Top negative correlations (people who make you sadder):")
+            negative_correlations = sorted(
+                [pa for pa in person_analyses if pa.correlation_coefficient < 0],
+                key=lambda x: x.correlation_coefficient,
+            )[:5]
+            for pa in negative_correlations:
+                print(
+                    f"  🔴 {pa.contact_name}: {pa.correlation_coefficient:.3f} (interacted {pa.days_interacted} days)"
+                )
+
+    def _extract_person_interactions(
+        self, daily_messages: dict, daily_person_interactions: dict
+    ):
+        """Extract person interactions from the daily messages that were already fetched."""
+        print("    👥 Extracting person interactions from message data...")
+
+        for date_str, message_list in daily_messages.items():
+            contacts_for_day = set()
+
+            for message in message_list:
+                contact = message.get("contact", "").strip()
+                if contact and contact != "Unknown" and contact != "":
+                    # Normalize contact names
+                    contact = self._normalize_contact_name(contact)
+                    if contact:
+                        contacts_for_day.add(contact)
+
+            if contacts_for_day:
+                daily_person_interactions[date_str] = contacts_for_day
+                print(f"      {date_str}: {len(contacts_for_day)} unique contacts")
+
+        total_interactions = sum(
+            len(contacts) for contacts in daily_person_interactions.values()
+        )
+        print(
+            f"    👥 Extracted {total_interactions} person interactions across {len(daily_person_interactions)} days"
+        )
+
+    def _normalize_contact_name(self, contact: str) -> str:
+        """Normalize contact names for consistent matching."""
+        if not contact or contact.strip() == "":
+            return ""
+
+        contact = contact.strip()
+
+        # Skip generic/system contacts
+        skip_contacts = {
+            "unknown",
+            "me",
+            "",
+            "system",
+            "group",
+            "chat",
+            "whatsapp",
+            "imessage",
+            "sms",
+            "mms",
+        }
+
+        if contact.lower() in skip_contacts:
+            return ""
+
+        # For WhatsApp group names, extract meaningful part
+        if " group" in contact.lower() or "group " in contact.lower():
+            # Keep group names but clean them up
+            contact = contact.replace(" Group", "").replace(" group", "")
+
+        return contact
+
+    def _calculate_person_correlation(
+        self, contact: str, days_with_sentiment, daily_person_interactions: dict
+    ):
+        """Calculate correlation between interacting with a person and sentiment scores."""
+        try:
+            # Prepare data for correlation calculation
+            sentiment_scores = []
+            person_interaction = []  # 1 if interacted with person, 0 if not
+
+            days_interacted = 0
+            days_not_interacted = 0
+            sentiment_when_interacted = []
+            sentiment_when_not_interacted = []
+            total_messages = 0
+
+            for day in days_with_sentiment:
+                date_str = day.date.isoformat()
+                sentiment_scores.append(day.sentiment)
+
+                # Check if we interacted with this person on this day
+                contacts_for_day = daily_person_interactions.get(date_str, set())
+                if contact in contacts_for_day:
+                    person_interaction.append(1)
+                    days_interacted += 1
+                    sentiment_when_interacted.append(day.sentiment)
+                    total_messages += (
+                        1  # Simplified - could count actual messages if needed
+                    )
+                else:
+                    person_interaction.append(0)
+                    days_not_interacted += 1
+                    sentiment_when_not_interacted.append(day.sentiment)
+
+            # Need at least some interactions to calculate meaningful correlation
+            if days_interacted < 2 or days_not_interacted < 2:
+                print(
+                    f"    ⚠️  Skipping {contact}: insufficient data (interacted: {days_interacted}, not interacted: {days_not_interacted})"
+                )
+                return None
+
+            # Calculate Pearson correlation coefficient
+            correlation = self._calculate_pearson_correlation(
+                sentiment_scores, person_interaction
+            )
+
+            # Calculate significance score (simple metric based on sample size and correlation strength)
+            significance_score = (
+                abs(correlation) * min(days_interacted, days_not_interacted) / 10.0
+            )
+
+            return {
+                "correlation": correlation,
+                "days_interacted": days_interacted,
+                "days_not_interacted": days_not_interacted,
+                "avg_sentiment_interacted": sum(sentiment_when_interacted)
+                / len(sentiment_when_interacted)
+                if sentiment_when_interacted
+                else 0,
+                "avg_sentiment_not_interacted": sum(sentiment_when_not_interacted)
+                / len(sentiment_when_not_interacted)
+                if sentiment_when_not_interacted
+                else 0,
+                "total_messages": total_messages,
+                "significance_score": significance_score,
+            }
+
+        except Exception as e:
+            logger.error(f"Error calculating correlation for contact {contact}: {e}")
+            return None
+
 
 class Day(models.Model):
     """Model for storing daily sentiment analysis results."""
@@ -953,3 +1467,84 @@ class Location(models.Model):
         if self.visit_count > 0:
             return self.total_time_minutes / self.visit_count
         return 0
+
+
+class WebsiteAnalysis(models.Model):
+    """Model for storing website-happiness correlations."""
+
+    time_analysis = models.ForeignKey(
+        TimeAnalysis, on_delete=models.CASCADE, related_name="website_analyses"
+    )
+    domain = models.CharField(max_length=200, help_text="Website domain")
+    example_url = models.URLField(
+        max_length=500, blank=True, help_text="Example URL from this domain"
+    )
+    correlation_coefficient = models.FloatField(
+        help_text="Correlation coefficient between website visits and sentiment scores"
+    )
+    days_visited = models.PositiveIntegerField(
+        help_text="Number of days the website was visited"
+    )
+    days_not_visited = models.PositiveIntegerField(
+        help_text="Number of days the website was not visited"
+    )
+    avg_sentiment_when_visited = models.FloatField(
+        help_text="Average sentiment score when the website was visited"
+    )
+    avg_sentiment_when_not_visited = models.FloatField(
+        help_text="Average sentiment score when the website was not visited"
+    )
+    total_visits = models.PositiveIntegerField(
+        help_text="Total number of visits to the website"
+    )
+    significance_score = models.FloatField(
+        help_text="Significance score of the correlation"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Website Analysis"
+        verbose_name_plural = "Website Analyses"
+        ordering = ["-correlation_coefficient"]
+
+    def __str__(self):
+        return f"{self.domain} - Correlation: {self.correlation_coefficient:.3f} (visited {self.days_visited} days)"
+
+
+class PersonAnalysis(models.Model):
+    """Model for storing person-happiness correlations."""
+
+    time_analysis = models.ForeignKey(
+        TimeAnalysis, on_delete=models.CASCADE, related_name="person_analyses"
+    )
+    contact_name = models.CharField(max_length=200, help_text="Contact or person name")
+    correlation_coefficient = models.FloatField(
+        help_text="Correlation coefficient between interactions with this person and sentiment scores"
+    )
+    days_interacted = models.PositiveIntegerField(
+        help_text="Number of days you interacted with this person"
+    )
+    days_not_interacted = models.PositiveIntegerField(
+        help_text="Number of days you did not interact with this person"
+    )
+    avg_sentiment_when_interacted = models.FloatField(
+        help_text="Average sentiment score when you interacted with this person"
+    )
+    avg_sentiment_when_not_interacted = models.FloatField(
+        help_text="Average sentiment score when you did not interact with this person"
+    )
+    total_messages = models.PositiveIntegerField(
+        help_text="Total number of messages exchanged with this person"
+    )
+    significance_score = models.FloatField(
+        help_text="Significance score of the correlation"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Person Analysis"
+        verbose_name_plural = "Person Analyses"
+        ordering = ["-correlation_coefficient"]
+
+    def __str__(self):
+        return f"{self.contact_name} - Correlation: {self.correlation_coefficient:.3f} (interacted {self.days_interacted} days)"

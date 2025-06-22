@@ -1,6 +1,13 @@
 from rest_framework import serializers
 
-from .models import Day, Location, Message, TimeAnalysis
+from .models import (
+    Day,
+    Location,
+    Message,
+    PersonAnalysis,
+    TimeAnalysis,
+    WebsiteAnalysis,
+)
 
 
 class LocationSerializer(serializers.ModelSerializer):
@@ -123,3 +130,44 @@ class TimeAnalysisCreateSerializer(serializers.ModelSerializer):
         if data["start_date"] >= data["end_date"]:
             raise serializers.ValidationError("End date must be after start date.")
         return data
+
+
+class WebsiteAnalysisSerializer(serializers.ModelSerializer):
+    """Serializer for website-happiness correlation data."""
+
+    class Meta:
+        model = WebsiteAnalysis
+        fields = [
+            "id",
+            "domain",
+            "example_url",
+            "correlation_coefficient",
+            "days_visited",
+            "days_not_visited",
+            "avg_sentiment_when_visited",
+            "avg_sentiment_when_not_visited",
+            "total_visits",
+            "significance_score",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
+
+
+class PersonAnalysisSerializer(serializers.ModelSerializer):
+    """Serializer for person-happiness correlation data."""
+
+    class Meta:
+        model = PersonAnalysis
+        fields = [
+            "id",
+            "contact_name",
+            "correlation_coefficient",
+            "days_interacted",
+            "days_not_interacted",
+            "avg_sentiment_when_interacted",
+            "avg_sentiment_when_not_interacted",
+            "total_messages",
+            "significance_score",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]

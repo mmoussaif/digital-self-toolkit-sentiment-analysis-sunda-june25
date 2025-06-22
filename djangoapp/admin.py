@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from .models import Day, Location, Message, TimeAnalysis
+from .models import (
+    Day,
+    Location,
+    Message,
+    PersonAnalysis,
+    TimeAnalysis,
+    WebsiteAnalysis,
+)
 
 
 @admin.register(TimeAnalysis)
@@ -186,6 +193,154 @@ class LocationAdmin(admin.ModelAdmin):
         return f"{obj.center_latitude}, {obj.center_longitude}"
 
     coordinates.short_description = "Coordinates"
+
+    def get_queryset(self, request):
+        """Optimize queryset with select_related."""
+        return super().get_queryset(request).select_related("time_analysis")
+
+
+@admin.register(WebsiteAnalysis)
+class WebsiteAnalysisAdmin(admin.ModelAdmin):
+    """Admin configuration for WebsiteAnalysis model."""
+
+    list_display = (
+        "domain",
+        "correlation_coefficient",
+        "get_correlation_label",
+        "days_visited",
+        "days_not_visited",
+        "total_visits",
+        "significance_score",
+        "time_analysis",
+        "created_at",
+    )
+    list_filter = (
+        "time_analysis",
+        "created_at",
+        "correlation_coefficient",
+        "significance_score",
+    )
+    search_fields = ("domain", "time_analysis__name")
+    readonly_fields = ("created_at",)
+    date_hierarchy = "created_at"
+    ordering = ("-correlation_coefficient",)
+
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": (
+                    "time_analysis",
+                    "domain",
+                    "correlation_coefficient",
+                    "significance_score",
+                )
+            },
+        ),
+        (
+            "Visit Statistics",
+            {
+                "fields": (
+                    "days_visited",
+                    "days_not_visited",
+                    "total_visits",
+                    "avg_sentiment_when_visited",
+                    "avg_sentiment_when_not_visited",
+                )
+            },
+        ),
+        ("Timestamps", {"fields": ("created_at",), "classes": ("collapse",)}),
+    )
+
+    def get_correlation_label(self, obj):
+        """Return human-readable correlation label."""
+        if obj.correlation_coefficient >= 0.5:
+            return "Very Positive"
+        elif obj.correlation_coefficient >= 0.2:
+            return "Positive"
+        elif obj.correlation_coefficient >= -0.2:
+            return "Neutral"
+        elif obj.correlation_coefficient >= -0.5:
+            return "Negative"
+        else:
+            return "Very Negative"
+
+    get_correlation_label.short_description = "Impact"
+    get_correlation_label.admin_order_field = "correlation_coefficient"
+
+    def get_queryset(self, request):
+        """Optimize queryset with select_related."""
+        return super().get_queryset(request).select_related("time_analysis")
+
+
+@admin.register(PersonAnalysis)
+class PersonAnalysisAdmin(admin.ModelAdmin):
+    """Admin configuration for PersonAnalysis model."""
+
+    list_display = (
+        "contact_name",
+        "correlation_coefficient",
+        "get_correlation_label",
+        "days_interacted",
+        "days_not_interacted",
+        "total_messages",
+        "significance_score",
+        "time_analysis",
+        "created_at",
+    )
+    list_filter = (
+        "time_analysis",
+        "created_at",
+        "correlation_coefficient",
+        "significance_score",
+    )
+    search_fields = ("contact_name", "time_analysis__name")
+    readonly_fields = ("created_at",)
+    date_hierarchy = "created_at"
+    ordering = ("-correlation_coefficient",)
+
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": (
+                    "time_analysis",
+                    "contact_name",
+                    "correlation_coefficient",
+                    "significance_score",
+                )
+            },
+        ),
+        (
+            "Interaction Statistics",
+            {
+                "fields": (
+                    "days_interacted",
+                    "days_not_interacted",
+                    "total_messages",
+                    "avg_sentiment_when_interacted",
+                    "avg_sentiment_when_not_interacted",
+                )
+            },
+        ),
+        ("Timestamps", {"fields": ("created_at",), "classes": ("collapse",)}),
+    )
+
+    def get_correlation_label(self, obj):
+        """Return human-readable correlation label."""
+        if obj.correlation_coefficient >= 0.5:
+            return "Very Positive"
+        elif obj.correlation_coefficient >= 0.2:
+            return "Positive"
+        elif obj.correlation_coefficient >= -0.2:
+            return "Neutral"
+        elif obj.correlation_coefficient >= -0.5:
+            return "Negative"
+        else:
+            return "Very Negative"
+
+    get_correlation_label.short_description = "Impact"
+    get_correlation_label.admin_order_field = "correlation_coefficient"
 
     def get_queryset(self, request):
         """Optimize queryset with select_related."""

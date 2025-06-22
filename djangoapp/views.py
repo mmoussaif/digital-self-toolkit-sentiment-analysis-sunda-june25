@@ -6,13 +6,22 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .filters import MessageFilter
-from .models import Day, Location, Message, TimeAnalysis
+from .models import (
+    Day,
+    Location,
+    Message,
+    PersonAnalysis,
+    TimeAnalysis,
+    WebsiteAnalysis,
+)
 from .serializers import (
     DaySerializer,
     LocationSerializer,
     MessageSerializer,
+    PersonAnalysisSerializer,
     TimeAnalysisCreateSerializer,
     TimeAnalysisSerializer,
+    WebsiteAnalysisSerializer,
 )
 
 # Create your views here.
@@ -222,4 +231,169 @@ class LocationViewSet(viewsets.ReadOnlyModelViewSet):
 
         locations = queryset[:limit]
         serializer = self.get_serializer(locations, many=True)
+        return Response(serializer.data)
+
+
+class WebsiteAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for WebsiteAnalysis model.
+    Read-only viewset for viewing website-happiness correlations.
+    """
+
+    queryset = WebsiteAnalysis.objects.all()
+    serializer_class = WebsiteAnalysisSerializer
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ["time_analysis"]
+    ordering_fields = [
+        "correlation_coefficient",
+        "significance_score",
+        "days_visited",
+        "total_visits",
+    ]
+    ordering = ["-correlation_coefficient"]  # Default to highest correlation first
+
+    def get_queryset(self):
+        queryset = WebsiteAnalysis.objects.all()
+        time_analysis_id = self.request.query_params.get("time_analysis")
+
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        return queryset.select_related("time_analysis").order_by(
+            "-correlation_coefficient"
+        )
+
+    @action(detail=False, methods=["get"])
+    def positive_correlations(self, request):
+        """Get websites with positive correlations (make you happier)."""
+        limit = int(request.query_params.get("limit", 10))
+        time_analysis_id = request.query_params.get("time_analysis")
+
+        queryset = (
+            self.get_queryset()
+            .filter(correlation_coefficient__gt=0)
+            .order_by("-correlation_coefficient")
+        )
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        websites = queryset[:limit]
+        serializer = self.get_serializer(websites, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def negative_correlations(self, request):
+        """Get websites with negative correlations (make you sadder)."""
+        limit = int(request.query_params.get("limit", 10))
+        time_analysis_id = request.query_params.get("time_analysis")
+
+        queryset = (
+            self.get_queryset()
+            .filter(correlation_coefficient__lt=0)
+            .order_by("correlation_coefficient")
+        )
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        websites = queryset[:limit]
+        serializer = self.get_serializer(websites, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def most_significant(self, request):
+        """Get websites with the highest significance scores."""
+        limit = int(request.query_params.get("limit", 10))
+        time_analysis_id = request.query_params.get("time_analysis")
+
+        queryset = self.get_queryset().order_by("-significance_score")
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        websites = queryset[:limit]
+        serializer = self.get_serializer(websites, many=True)
+        return Response(serializer.data)
+
+
+class PersonAnalysisViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for PersonAnalysis model.
+    Read-only viewset for viewing person-happiness correlations.
+    """
+
+    queryset = PersonAnalysis.objects.all()
+    serializer_class = PersonAnalysisSerializer
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.OrderingFilter,
+        filters.SearchFilter,
+    ]
+    filterset_fields = ["time_analysis"]
+    ordering_fields = [
+        "correlation_coefficient",
+        "significance_score",
+        "days_interacted",
+        "total_messages",
+    ]
+    ordering = ["-correlation_coefficient"]  # Default to highest correlation first
+    search_fields = ["contact_name"]
+
+    def get_queryset(self):
+        queryset = PersonAnalysis.objects.all()
+        time_analysis_id = self.request.query_params.get("time_analysis")
+
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        return queryset.select_related("time_analysis").order_by(
+            "-correlation_coefficient"
+        )
+
+    @action(detail=False, methods=["get"])
+    def positive_correlations(self, request):
+        """Get people with positive correlations (make you happier)."""
+        limit = int(request.query_params.get("limit", 10))
+        time_analysis_id = request.query_params.get("time_analysis")
+
+        queryset = (
+            self.get_queryset()
+            .filter(correlation_coefficient__gt=0)
+            .order_by("-correlation_coefficient")
+        )
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        people = queryset[:limit]
+        serializer = self.get_serializer(people, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def negative_correlations(self, request):
+        """Get people with negative correlations (make you sadder)."""
+        limit = int(request.query_params.get("limit", 10))
+        time_analysis_id = request.query_params.get("time_analysis")
+
+        queryset = (
+            self.get_queryset()
+            .filter(correlation_coefficient__lt=0)
+            .order_by("correlation_coefficient")
+        )
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        people = queryset[:limit]
+        serializer = self.get_serializer(people, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def most_significant(self, request):
+        """Get people with the highest significance scores."""
+        limit = int(request.query_params.get("limit", 10))
+        time_analysis_id = request.query_params.get("time_analysis")
+
+        queryset = self.get_queryset().order_by("-significance_score")
+        if time_analysis_id:
+            queryset = queryset.filter(time_analysis_id=time_analysis_id)
+
+        people = queryset[:limit]
+        serializer = self.get_serializer(people, many=True)
         return Response(serializer.data)
