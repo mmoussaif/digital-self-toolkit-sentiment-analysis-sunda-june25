@@ -5,6 +5,7 @@ from .models import (
     Location,
     Message,
     PersonAnalysis,
+    PlaceAnalysis,
     TimeAnalysis,
     WebsiteAnalysis,
 )
@@ -171,3 +172,36 @@ class PersonAnalysisSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+
+class PlaceAnalysisSerializer(serializers.ModelSerializer):
+    """Serializer for place-happiness correlation data."""
+
+    location_name = serializers.CharField(source="location.name", read_only=True)
+    location_address = serializers.CharField(source="location.address", read_only=True)
+    location_coordinates = serializers.ReadOnlyField(source="location.coordinates")
+
+    class Meta:
+        model = PlaceAnalysis
+        fields = [
+            "id",
+            "location",
+            "location_name",
+            "location_address",
+            "location_coordinates",
+            "correlation_coefficient",
+            "days_present",
+            "days_not_present",
+            "avg_sentiment_when_present",
+            "avg_sentiment_when_not_present",
+            "total_visits",
+            "significance_score",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "location_name",
+            "location_address",
+            "location_coordinates",
+        ]

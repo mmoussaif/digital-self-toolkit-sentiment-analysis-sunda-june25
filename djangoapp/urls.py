@@ -6,6 +6,7 @@ from .views import (
     LocationViewSet,
     MessageViewSet,
     PersonAnalysisViewSet,
+    PlaceAnalysisViewSet,
     TimeAnalysisViewSet,
     WebsiteAnalysisViewSet,
 )
@@ -18,6 +19,7 @@ router.register(r"messages", MessageViewSet, basename="message")
 router.register(r"locations", LocationViewSet, basename="location")
 router.register(r"website-analyses", WebsiteAnalysisViewSet, basename="websiteanalysis")
 router.register(r"person-analyses", PersonAnalysisViewSet, basename="personanalysis")
+router.register(r"place-analyses", PlaceAnalysisViewSet, basename="placeanalysis")
 
 # The API URLs are now determined automatically by the router
 urlpatterns = [

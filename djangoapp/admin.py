@@ -5,6 +5,7 @@ from .models import (
     Location,
     Message,
     PersonAnalysis,
+    PlaceAnalysis,
     TimeAnalysis,
     WebsiteAnalysis,
 )
@@ -220,7 +221,7 @@ class WebsiteAnalysisAdmin(admin.ModelAdmin):
         "correlation_coefficient",
         "significance_score",
     )
-    search_fields = ("domain", "time_analysis__name")
+    search_fields = ("domain", "time_analysis__name", "example_url")
     readonly_fields = ("created_at",)
     date_hierarchy = "created_at"
     ordering = ("-correlation_coefficient",)
@@ -232,6 +233,7 @@ class WebsiteAnalysisAdmin(admin.ModelAdmin):
                 "fields": (
                     "time_analysis",
                     "domain",
+                    "example_url",
                     "correlation_coefficient",
                     "significance_score",
                 )
@@ -279,13 +281,14 @@ class PersonAnalysisAdmin(admin.ModelAdmin):
 
     list_display = (
         "contact_name",
+        "time_analysis",
         "correlation_coefficient",
-        "get_correlation_label",
         "days_interacted",
         "days_not_interacted",
+        "avg_sentiment_when_interacted",
+        "avg_sentiment_when_not_interacted",
         "total_messages",
         "significance_score",
-        "time_analysis",
         "created_at",
     )
     list_filter = (
@@ -318,6 +321,13 @@ class PersonAnalysisAdmin(admin.ModelAdmin):
                     "days_interacted",
                     "days_not_interacted",
                     "total_messages",
+                )
+            },
+        ),
+        (
+            "Sentiment Analysis",
+            {
+                "fields": (
                     "avg_sentiment_when_interacted",
                     "avg_sentiment_when_not_interacted",
                 )
@@ -326,22 +336,81 @@ class PersonAnalysisAdmin(admin.ModelAdmin):
         ("Timestamps", {"fields": ("created_at",), "classes": ("collapse",)}),
     )
 
-    def get_correlation_label(self, obj):
-        """Return human-readable correlation label."""
-        if obj.correlation_coefficient >= 0.5:
-            return "Very Positive"
-        elif obj.correlation_coefficient >= 0.2:
-            return "Positive"
-        elif obj.correlation_coefficient >= -0.2:
-            return "Neutral"
-        elif obj.correlation_coefficient >= -0.5:
-            return "Negative"
-        else:
-            return "Very Negative"
-
-    get_correlation_label.short_description = "Impact"
-    get_correlation_label.admin_order_field = "correlation_coefficient"
-
     def get_queryset(self, request):
         """Optimize queryset with select_related."""
         return super().get_queryset(request).select_related("time_analysis")
+
+
+@admin.register(PlaceAnalysis)
+class PlaceAnalysisAdmin(admin.ModelAdmin):
+    """Admin configuration for PlaceAnalysis model."""
+
+    list_display = (
+        "get_location_name",
+        "time_analysis",
+        "correlation_coefficient",
+        "days_present",
+        "days_not_present",
+        "avg_sentiment_when_present",
+        "avg_sentiment_when_not_present",
+        "total_visits",
+        "significance_score",
+        "created_at",
+    )
+    list_filter = (
+        "time_analysis",
+        "created_at",
+        "correlation_coefficient",
+        "significance_score",
+    )
+    search_fields = ("location__name", "location__address", "time_analysis__name")
+    readonly_fields = ("created_at",)
+    date_hierarchy = "created_at"
+    ordering = ("-correlation_coefficient",)
+
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": (
+                    "time_analysis",
+                    "location",
+                    "correlation_coefficient",
+                    "significance_score",
+                )
+            },
+        ),
+        (
+            "Presence Statistics",
+            {
+                "fields": (
+                    "days_present",
+                    "days_not_present",
+                    "total_visits",
+                )
+            },
+        ),
+        (
+            "Sentiment Analysis",
+            {
+                "fields": (
+                    "avg_sentiment_when_present",
+                    "avg_sentiment_when_not_present",
+                )
+            },
+        ),
+        ("Timestamps", {"fields": ("created_at",), "classes": ("collapse",)}),
+    )
+
+    def get_location_name(self, obj):
+        """Return location name or coordinates for list display."""
+        return (
+            obj.location.name
+            or f"{obj.location.center_latitude}, {obj.location.center_longitude}"
+        )
+
+    get_location_name.short_description = "Location"
+
+    def get_queryset(self, request):
+        """Optimize queryset with select_related."""
+        return super().get_queryset(request).select_related("time_analysis", "location")

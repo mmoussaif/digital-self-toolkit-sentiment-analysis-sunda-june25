@@ -2,7 +2,7 @@ import logging
 import math
 import os
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import boto3
@@ -239,6 +239,10 @@ class TimeAnalysis(models.Model):
         # THIRD PASS: Person correlation analysis
         print("\n👥 Starting person correlation analysis (third pass)...")
         self._analyze_person_correlations(daily_messages)
+
+        # FOURTH PASS: Place correlation analysis
+        print("\n📍 Starting place correlation analysis (fourth pass)...")
+        self._analyze_place_correlations()
 
         self.status = "completed"
         self.save(update_fields=["status"])
@@ -1310,6 +1314,243 @@ class TimeAnalysis(models.Model):
             logger.error(f"Error calculating correlation for contact {contact}: {e}")
             return None
 
+    def _analyze_place_correlations(self):
+        """
+        Fourth pass: Analyze correlation between being at specific places and daily sentiment scores.
+        """
+        print("🔍 Analyzing place correlation data...")
+
+        # Clear existing PlaceAnalysis records for this TimeAnalysis
+        existing_place_count = PlaceAnalysis.objects.filter(time_analysis=self).count()
+        if existing_place_count > 0:
+            print(
+                f"🗑️  Clearing {existing_place_count} existing PlaceAnalysis records..."
+            )
+            PlaceAnalysis.objects.filter(time_analysis=self).delete()
+            print("✅ Existing PlaceAnalysis records cleared")
+
+        # Get all days with sentiment scores
+        days_with_sentiment = Day.objects.filter(
+            time_analysis=self, sentiment__isnull=False
+        ).order_by("date")
+        if not days_with_sentiment.exists():
+            print(
+                "❌ No days with sentiment scores found for place correlation analysis"
+            )
+            return
+
+        print(f"📊 Found {days_with_sentiment.count()} days with sentiment scores")
+
+        # Get all locations for this time analysis
+        locations = Location.objects.filter(time_analysis=self)
+        if not locations.exists():
+            print("❌ No location data found for correlation analysis")
+            return
+
+        print(f"📍 Found {locations.count()} locations")
+
+        # Extract daily place presence from location data
+        daily_place_presence = self._extract_daily_place_presence(
+            locations, days_with_sentiment
+        )
+
+        # Collect all unique location IDs
+        all_location_ids = set()
+        for location_ids in daily_place_presence.values():
+            all_location_ids.update(location_ids)
+
+        print(f"📍 Found {len(all_location_ids)} unique locations with presence data")
+
+        if not all_location_ids:
+            print("❌ No location presence data found for correlation analysis")
+            return
+
+        # Calculate correlations for each location
+        place_analyses = []
+        for location_id in all_location_ids:
+            location = locations.get(id=location_id)
+            print(
+                f"  📈 Analyzing correlation for {location.name or f'Location {location_id}'}..."
+            )
+            correlation_data = self._calculate_place_correlation(
+                location, days_with_sentiment, daily_place_presence
+            )
+
+            if correlation_data:
+                place_analysis = PlaceAnalysis.objects.create(
+                    time_analysis=self,
+                    location=location,
+                    correlation_coefficient=correlation_data["correlation"],
+                    days_present=correlation_data["days_present"],
+                    days_not_present=correlation_data["days_not_present"],
+                    avg_sentiment_when_present=correlation_data[
+                        "avg_sentiment_present"
+                    ],
+                    avg_sentiment_when_not_present=correlation_data[
+                        "avg_sentiment_not_present"
+                    ],
+                    total_visits=correlation_data["total_visits"],
+                    significance_score=correlation_data["significance_score"],
+                )
+                place_analyses.append(place_analysis)
+
+        print(
+            f"🎉 Place correlation analysis complete! Created {len(place_analyses)} PlaceAnalysis records"
+        )
+
+        # Show top correlations
+        if place_analyses:
+            print("\n📊 Top positive correlations (places that make you happier):")
+            positive_correlations = sorted(
+                [pa for pa in place_analyses if pa.correlation_coefficient > 0],
+                key=lambda x: x.correlation_coefficient,
+                reverse=True,
+            )[:5]
+            for pa in positive_correlations:
+                location_name = pa.location.name or f"Location {pa.location.id}"
+                print(
+                    f"  🟢 {location_name}: {pa.correlation_coefficient:.3f} (present {pa.days_present} days)"
+                )
+
+            print("\n📊 Top negative correlations (places that make you sadder):")
+            negative_correlations = sorted(
+                [pa for pa in place_analyses if pa.correlation_coefficient < 0],
+                key=lambda x: x.correlation_coefficient,
+            )[:5]
+            for pa in negative_correlations:
+                location_name = pa.location.name or f"Location {pa.location.id}"
+                print(
+                    f"  🔴 {location_name}: {pa.correlation_coefficient:.3f} (present {pa.days_present} days)"
+                )
+
+    def _extract_daily_place_presence(self, locations, days_with_sentiment):
+        """Extract daily place presence from location data."""
+        print("    📍 Extracting daily place presence from location data...")
+
+        daily_place_presence = defaultdict(set)  # date_str -> set of location_ids
+
+        for location in locations:
+            # For each location, determine which days the user was present
+            # We'll use a simple approach: if the location has visits during the analysis period,
+            # distribute them across the days proportionally
+
+            if not location.first_visit or not location.last_visit:
+                continue
+
+            # Convert to dates
+            first_date = location.first_visit.date()
+            last_date = location.last_visit.date()
+
+            # For simplicity, we'll assume the user was at this location on days
+            # proportional to their visit count and total time
+            # This is a rough approximation - in reality, we'd need more detailed GPS data
+
+            # Calculate average days per visit (rough estimate)
+            total_days_in_period = (last_date - first_date).days + 1
+            if total_days_in_period <= 0:
+                total_days_in_period = 1
+
+            # If they spent significant time at this location, mark presence
+            # Use a threshold based on total time and visit count
+            time_threshold = 60  # 60 minutes minimum to consider "present"
+
+            if location.total_time_minutes >= time_threshold:
+                # For locations with significant time, mark presence for multiple days
+                # based on visit count and time distribution
+                days_to_mark = min(location.visit_count, total_days_in_period)
+
+                # Distribute days evenly across the period
+                if days_to_mark > 0:
+                    for i in range(days_to_mark):
+                        # Calculate which day to mark (spread evenly)
+                        day_offset = int(i * total_days_in_period / days_to_mark)
+                        target_date = first_date + timedelta(days=day_offset)
+
+                        # Only mark if this date is within our analysis period
+                        if self.start_date <= target_date <= self.end_date:
+                            date_str = target_date.isoformat()
+                            daily_place_presence[date_str].add(location.pk)
+
+        total_presence_records = sum(
+            len(location_ids) for location_ids in daily_place_presence.values()
+        )
+        print(
+            f"    📍 Extracted {total_presence_records} place presence records across {len(daily_place_presence)} days"
+        )
+
+        return daily_place_presence
+
+    def _calculate_place_correlation(
+        self, location, days_with_sentiment, daily_place_presence: dict
+    ):
+        """Calculate correlation between being at a specific place and sentiment scores."""
+        try:
+            # Prepare data for correlation calculation
+            sentiment_scores = []
+            place_presence = []  # 1 if present at place, 0 if not
+
+            days_present = 0
+            days_not_present = 0
+            sentiment_when_present = []
+            sentiment_when_not_present = []
+            total_visits = location.visit_count
+
+            for day in days_with_sentiment:
+                date_str = day.date.isoformat()
+                sentiment_scores.append(day.sentiment)
+
+                # Check if we were at this place on this day
+                location_ids_for_day = daily_place_presence.get(date_str, set())
+                if location.pk in location_ids_for_day:
+                    place_presence.append(1)
+                    days_present += 1
+                    sentiment_when_present.append(day.sentiment)
+                else:
+                    place_presence.append(0)
+                    days_not_present += 1
+                    sentiment_when_not_present.append(day.sentiment)
+
+            # Need at least some presence data to calculate meaningful correlation
+            if days_present < 2 or days_not_present < 2:
+                location_name = location.name or f"Location {location.pk}"
+                print(
+                    f"    ⚠️  Skipping {location_name}: insufficient data (present: {days_present}, not present: {days_not_present})"
+                )
+                return None
+
+            # Calculate Pearson correlation coefficient
+            correlation = self._calculate_pearson_correlation(
+                sentiment_scores, place_presence
+            )
+
+            # Calculate significance score (simple metric based on sample size and correlation strength)
+            significance_score = (
+                abs(correlation) * min(days_present, days_not_present) / 10.0
+            )
+
+            return {
+                "correlation": correlation,
+                "days_present": days_present,
+                "days_not_present": days_not_present,
+                "avg_sentiment_present": sum(sentiment_when_present)
+                / len(sentiment_when_present)
+                if sentiment_when_present
+                else 0,
+                "avg_sentiment_not_present": sum(sentiment_when_not_present)
+                / len(sentiment_when_not_present)
+                if sentiment_when_not_present
+                else 0,
+                "total_visits": total_visits,
+                "significance_score": significance_score,
+            }
+
+        except Exception as e:
+            location_name = location.name or f"Location {location.pk}"
+            logger.error(
+                f"Error calculating correlation for location {location_name}: {e}"
+            )
+            return None
+
 
 class Day(models.Model):
     """Model for storing daily sentiment analysis results."""
@@ -1548,3 +1789,47 @@ class PersonAnalysis(models.Model):
 
     def __str__(self):
         return f"{self.contact_name} - Correlation: {self.correlation_coefficient:.3f} (interacted {self.days_interacted} days)"
+
+
+class PlaceAnalysis(models.Model):
+    """Model for storing place-happiness correlations."""
+
+    time_analysis = models.ForeignKey(
+        TimeAnalysis, on_delete=models.CASCADE, related_name="place_analyses"
+    )
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.CASCADE,
+        help_text="The location this analysis refers to",
+    )
+    correlation_coefficient = models.FloatField(
+        help_text="Correlation coefficient between being at this place and sentiment scores"
+    )
+    days_present = models.PositiveIntegerField(
+        help_text="Number of days you were present at this place"
+    )
+    days_not_present = models.PositiveIntegerField(
+        help_text="Number of days you were not present at this place"
+    )
+    avg_sentiment_when_present = models.FloatField(
+        help_text="Average sentiment score when you were at this place"
+    )
+    avg_sentiment_when_not_present = models.FloatField(
+        help_text="Average sentiment score when you were not at this place"
+    )
+    total_visits = models.PositiveIntegerField(
+        help_text="Total number of visits to this place"
+    )
+    significance_score = models.FloatField(
+        help_text="Significance score of the correlation"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Place Analysis"
+        verbose_name_plural = "Place Analyses"
+        ordering = ["-correlation_coefficient"]
+
+    def __str__(self):
+        location_name = self.location.name or f"Location {self.location.pk}"
+        return f"{location_name} - Correlation: {self.correlation_coefficient:.3f} (present {self.days_present} days)"
